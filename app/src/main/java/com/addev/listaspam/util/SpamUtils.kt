@@ -292,13 +292,7 @@ class SpamUtils {
 
         val jobs = spamCheckers.map { checker ->
             launch {
-                val start = System.currentTimeMillis()
                 val result = runCatching { checker(number) }.getOrDefault(false)
-                val elapsed = System.currentTimeMillis() - start
-
-                Logger.getLogger("SpamUtils").info(
-                    "Spam checker for $number completed in ${elapsed}ms, result: $result"
-                )
 
                 if (result) {
                     resultChannel.send(true)
@@ -309,14 +303,11 @@ class SpamUtils {
         }
 
         val isSpam = try {
-            select<Boolean> {
+            select {
                 resultChannel.onReceiveCatching { result ->
                     result.getOrNull() ?: false
                 }
                 onTimeout(timeoutMs) {
-                    Logger.getLogger("SpamUtils").warning(
-                        "Spam check timed out after ${timeoutMs}ms for $number"
-                    )
                     false
                 }
             }

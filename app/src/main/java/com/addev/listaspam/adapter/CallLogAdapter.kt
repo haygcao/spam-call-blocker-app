@@ -278,7 +278,6 @@ class CallLogAdapter(
                 } else null
             }
         } catch (e: Exception) {
-            Log.e("getContactName", "Lookup failed for $phoneNumber", e)
             null
         }
     }
