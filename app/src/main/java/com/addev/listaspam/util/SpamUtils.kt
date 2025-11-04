@@ -20,16 +20,20 @@ import com.addev.listaspam.R
 import com.google.i18n.phonenumbers.PhoneNumberUtil
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.selects.onTimeout
+import kotlinx.coroutines.selects.select
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import org.jsoup.Jsoup
 import java.io.IOException
 import java.util.Locale
+import java.util.concurrent.atomic.AtomicInteger
 import java.util.logging.Logger
 
 /**
@@ -132,12 +136,13 @@ class SpamUtils {
         callback: (isSpam: Boolean) -> Unit = {}
     ) {
         CoroutineScope(Dispatchers.IO).launch {
-            val number = if (details != null) getRawPhoneNumber(details) else phoneNumber;
-
             if (!isBlockingEnabled(context)) {
                 showToast(context, context.getString(R.string.blocking_disabled), Toast.LENGTH_LONG)
+                callback(false)
                 return@launch
             }
+
+            val number = if (details != null) getRawPhoneNumber(details) else phoneNumber;
 
             val sharedPreferences = context.getSharedPreferences(SPAM_PREFS, Context.MODE_PRIVATE)
             val blockedNumbers = sharedPreferences.getStringSet(BLOCK_NUMBERS_KEY, null)
@@ -153,18 +158,21 @@ class SpamUtils {
                     )
                     return@launch
                 } else {
+                    callback(false)
                     return@launch
                 }
             }
 
             // Check whitelist first - if whitelisted, always allow
             if (isNumberWhitelisted(context, number)) {
+                callback(false)
                 return@launch
             }
 
             // Don't check number if is in contacts
             val isNumberInAgenda = isNumberInAgenda(context, number)
             if (isNumberInAgenda) {
+                callback(false)
                 return@launch
             }
 
@@ -250,42 +258,79 @@ class SpamUtils {
                     callback
                 )
             } else {
-                handleNonSpamNumber(context, number)
+                // handleNonSpamNumber(context, number)
+                callback(false)
                 return@launch
             }
         }
     }
 
     /**
-     * Runs a list of suspend functions in parallel to check if a number is spam.
+     * Performs a "race" among multiple spam checkers to determine if a phone number is spam.
      *
-     * Launches all checks simultaneously and returns `true` as soon as
-     * any function returns `true`. At that point, it cancels all other running tasks.
-     * If none return `true`, it returns `false`.
+     * Each checker is a suspend function that returns `true` if the number is spam.
+     * The function returns `true` as soon as the first checker reports spam.
+     * If all checkers finish and none report spam, it returns `false`.
+     * A timeout can be provided to handle long-running or stuck checkers.
      *
-     * @param spamCheckers List of suspend functions that take a number (String) and return a Boolean indicating spam status.
-     * @param number The number (String) to be evaluated by the spam checkers.
-     * @return `true` if at least one function determines the number is spam; `false` otherwise.
+     * This function launches all checkers concurrently and cancels remaining jobs
+     * as soon as a result is determined, to save resources.
+     *
+     * @param spamCheckers A list of suspend functions that each take a phone number
+     *                     and return `true` if it is spam.
+     * @param number The phone number to check for spam.
+     * @param timeoutMs Maximum time in milliseconds to wait for a result before returning `false`.
+     *                  Default is 5000ms.
+     *
+     * @return `true` if any checker reports spam, `false` if none report spam or timeout occurs.
      */
+    @OptIn(ExperimentalCoroutinesApi::class)
     private suspend fun isSpamRace(
         spamCheckers: List<suspend (String) -> Boolean>,
-        number: String
+        number: String,
+        timeoutMs: Long = 5000
     ): Boolean = coroutineScope {
-        val resultChannel = Channel<Boolean>()
+        if (spamCheckers.isEmpty()) return@coroutineScope false
+
+        val resultChannel = Channel<Boolean>(capacity = Channel.UNLIMITED)
+        val remaining = AtomicInteger(spamCheckers.size)
 
         val jobs = spamCheckers.map { checker ->
             launch {
+                val start = System.currentTimeMillis()
                 val result = runCatching { checker(number) }.getOrDefault(false)
-                if (result) resultChannel.send(true)
+                val elapsed = System.currentTimeMillis() - start
+                
+                Logger.getLogger("SpamUtils").info(
+                    "Spam checker for $number completed in ${elapsed}ms, result: $result"
+                )
+
+                if (result) {
+                    resultChannel.send(true)
+                } else if (remaining.decrementAndGet() == 0) {
+                    resultChannel.close()
+                }
             }
         }
 
-        val isSpam = resultChannel.receive()
+        val isSpam = try {
+            select<Boolean> {
+                resultChannel.onReceiveCatching { result ->
+                    result.getOrNull() ?: false
+                }
+                onTimeout(timeoutMs) {
+                    Logger.getLogger("SpamUtils").warning(
+                        "Spam check timed out after ${timeoutMs}ms for $number"
+                    )
+                    false
+                }
+            }
+        } finally {
+            jobs.forEach { it.cancel() }
+            resultChannel.cancel()
+        }
 
-        // Cancel all other jobs
-        jobs.forEach { it.cancel() }
-
-        return@coroutineScope isSpam
+        isSpam
     }
 
     private fun buildSpamCheckers(context: Context): List<suspend (String) -> Boolean> {
@@ -443,7 +488,6 @@ class SpamUtils {
                 context.getString(R.string.incoming_call_not_spam),
                 10000
             )
-            removeSpamNumber(context, number)
         }
     }
 
