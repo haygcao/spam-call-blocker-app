@@ -199,6 +199,11 @@ class CallLogAdapter(
                             true
                         }
 
+                        R.id.add_to_contacts_action -> {
+                            addToContacts(number)
+                            true
+                        }
+
                         R.id.whitelist_action -> {
                             if (isWhitelisted) {
                                 removeWhitelistNumber(context, number)
@@ -306,6 +311,14 @@ class CallLogAdapter(
         val cleanNumber = number.replace(Regex("[^+\\d]"), "")
         val url = String.format(WHATSAPP_URL_TEMPLATE, cleanNumber)
         val intent = Intent(Intent.ACTION_VIEW, url.toUri())
+        context.startActivity(intent)
+    }
+
+    private fun addToContacts(number: String) {
+        val intent = Intent(Intent.ACTION_INSERT).apply {
+            type = ContactsContract.Contacts.CONTENT_TYPE
+            putExtra(ContactsContract.Intents.Insert.PHONE, number)
+        }
         context.startActivity(intent)
     }
 
