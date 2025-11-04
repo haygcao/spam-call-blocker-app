@@ -164,6 +164,18 @@ class SpamUtils {
                 return@launch
             }
 
+            // End call if the number is already blocked
+            if (blockedNumbers?.contains(number) == true) {
+                handleSpamNumber(
+                    context,
+                    number,
+                    false,
+                    context.getString(R.string.block_already_blocked_number),
+                    callback
+                )
+                return@launch
+            }
+
             // Don't check number if is in contacts
             val isNumberInAgenda = isNumberInAgenda(context, number)
             if (isNumberInAgenda) {
@@ -177,18 +189,6 @@ class SpamUtils {
                     number,
                     false,
                     context.getString(R.string.block_non_contact),
-                    callback
-                )
-                return@launch
-            }
-
-            // End call if the number is already blocked
-            if (blockedNumbers?.contains(number) == true) {
-                handleSpamNumber(
-                    context,
-                    number,
-                    false,
-                    context.getString(R.string.block_already_blocked_number),
                     callback
                 )
                 return@launch
