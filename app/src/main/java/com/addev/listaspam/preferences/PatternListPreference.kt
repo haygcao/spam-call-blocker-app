@@ -30,7 +30,7 @@ class PatternListPreference : EditTextPreference {
     private fun validatePatterns(input: String): Boolean {
         if (TextUtils.isEmpty(input)) return true
 
-        val minLen = 3
+        val minLen = 2
         val maxLen = 20
 
         val patterns = input.split("\n")
