@@ -150,6 +150,9 @@ class ReportDialogManager(private val context: Context) {
                     if (ApiUtils.reportToUnknownPhone(number, message, isSpam, lang)) {
                         reportedTo.add("UnknownPhone")
                     }
+                    if (isSpam) {
+                        saveSpamNumber(context, number)
+                    }
                 }
             }
 
